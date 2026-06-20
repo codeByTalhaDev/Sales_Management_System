@@ -1,4 +1,4 @@
-# USE NODE 18 SMALL VERSION
+# USE NODE 20 SMALL VERSION
 FROM node:20-alpine
 # alpine = lightweight Linux, only 5MB
 # without alpine = 900MB, with alpine = 50MB
