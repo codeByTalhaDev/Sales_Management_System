@@ -8,6 +8,11 @@ server/node_modules/
 client/.env
 server/.env
 
+# Keep example files — always push these
+!.env.example
+!client/.env.example
+!server/.env.example
+
 # Build output
 client/dist
 client/build
