@@ -40,6 +40,8 @@ services:
       EMAIL_USER: ${EMAIL_USER}
       EMAIL_PASS: ${EMAIL_PASS}
       NODE_ENV: production
+    volumes:
+      - product_images:/app/uploads
     depends_on:
       mysql:
         condition: service_healthy
@@ -63,6 +65,7 @@ services:
 # VOLUMES
 volumes:
   mysql_data:
+  product_images:
 
 # NETWORKS
 networks:

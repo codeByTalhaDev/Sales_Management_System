@@ -11,7 +11,7 @@ const StockList = () => {
     try {
       setLoading(true);
 
-      const res = await api.get("/stock/list");
+      const res = await api.get("/stock");
 
       setProducts(res.data.products || []);
     } catch (error) {
