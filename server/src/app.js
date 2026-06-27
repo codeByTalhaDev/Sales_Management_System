@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import path from "path";
 
 // ROUTES
 import authRoutes from "./routes/authRoutes.js";
@@ -26,6 +27,9 @@ app.use(cors({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// ─── STATIC FILES (UPLOADED IMAGES) ────────────────────
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // ─── ROUTES ────────────────────────────────────────────
 app.use("/api/auth",       authRoutes);
