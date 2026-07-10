@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Eye, Trash2, X } from "lucide-react";
+import { Eye, Trash2 } from "lucide-react";
+
+import PurchaseSlipModal from "./PurchaseSlipModal";
 
 const cellClass = "px-4 py-4";
 
@@ -20,6 +22,24 @@ const PurchaseTable = ({ purchases, loading, onDelete }) => {
     await onDelete(deleteId);
     setDeleteId(null);
   };
+
+  // Normalize a purchase row from GET /purchases into the shape
+  // PurchaseSlipModal expects (items use `subtotal`, not `total`).
+  const buildSlip = (purchase) => ({
+    purchaseNo: purchase.purchaseNo,
+    supplier: purchase.supplier,
+    purchaseDate: purchase.purchaseDate,
+    notes: purchase.notes,
+    totalAmount: purchase.totalAmount,
+    paidAmount: purchase.paidAmount,
+    remainingBalance: purchase.remainingBalance,
+    items: purchase.items?.map((item) => ({
+      product: item.product,
+      quantity: item.quantity,
+      purchasePrice: item.purchasePrice,
+      subtotal: item.total,
+    })),
+  });
 
   if (loading) {
     return (
@@ -147,89 +167,11 @@ const PurchaseTable = ({ purchases, loading, onDelete }) => {
       </div>
 
       {viewPurchase && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl w-full max-w-4xl p-5 sm:p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-5">
-              <h2 className="text-xl font-bold text-gray-800">
-                Purchase Details
-              </h2>
-
-              <button
-                onClick={() => setViewPurchase(null)}
-                className="cursor-pointer"
-              >
-                <X />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-5">
-              <p>
-                <strong>Purchase No:</strong> {viewPurchase.purchaseNo}
-              </p>
-
-              <p>
-                <strong>Supplier:</strong>{" "}
-                {viewPurchase.supplier?.supplierName || "-"}
-              </p>
-
-              <p>
-                <strong>Date:</strong> {viewPurchase.purchaseDate}
-              </p>
-
-              <p>
-                <strong>Total:</strong> Rs.{" "}
-                {Number(viewPurchase.totalAmount || 0).toFixed(2)}
-              </p>
-
-              <p>
-                <strong>Paid:</strong> Rs.{" "}
-                {Number(viewPurchase.paidAmount || 0).toFixed(2)}
-              </p>
-
-              <p>
-                <strong>Remaining:</strong> Rs.{" "}
-                {Number(viewPurchase.remainingBalance || 0).toFixed(2)}
-              </p>
-
-              <p className="sm:col-span-2">
-                <strong>Notes:</strong> {viewPurchase.notes || "-"}
-              </p>
-            </div>
-
-            <div className="overflow-x-auto border rounded-2xl">
-              <table className="w-full min-w-[700px] text-sm">
-                <thead className="bg-orange-50">
-                  <tr className="text-left text-gray-700">
-                    <th className={cellClass}>Product</th>
-                    <th className={cellClass}>Quantity</th>
-                    <th className={cellClass}>Price</th>
-                    <th className={cellClass}>Total</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {viewPurchase.items?.map((item) => (
-                    <tr key={item.id} className="border-t">
-                      <td className={cellClass}>
-                        {item.product?.productName || "-"}
-                      </td>
-
-                      <td className={cellClass}>{item.quantity}</td>
-
-                      <td className={cellClass}>
-                        Rs. {Number(item.purchasePrice || 0).toFixed(2)}
-                      </td>
-
-                      <td className={cellClass}>
-                        Rs. {Number(item.total || 0).toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+        <PurchaseSlipModal
+          slip={buildSlip(viewPurchase)}
+          onClose={() => setViewPurchase(null)}
+          showPrint={true}
+        />
       )}
 
       {deleteId && (
