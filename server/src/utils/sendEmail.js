@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
-
+console.log("EMAIL_USER:", process.env.EMAIL_USER);
+console.log("EMAIL_PASS length:", process.env.EMAIL_PASS?.length);
 const sendEmail = async (email, subject, html) => {
 
   const transporter = nodemailer.createTransport({

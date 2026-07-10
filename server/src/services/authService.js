@@ -24,18 +24,46 @@ const otpEmailTemplate = (otp) => `
 
 // REGISTER
 export const registerService = async (data) => {
+  console.log("STEP 1 - registerService called");
+
   const { fullName, email, password } = data;
+
+  console.log("STEP 2 - Data received:", {
+    fullName,
+    email,
+  });
 
   const userExists = await User.findOne({ where: { email } });
 
+  console.log("STEP 3 - User lookup completed");
+
   if (userExists) {
+    console.log("STEP 4 - User already exists");
+
     if (!userExists.isVerified) {
+      console.log("STEP 5 - User not verified");
+
       const otp = generateOtp();
+
       userExists.otp = otp;
       userExists.otpExpiry = Date.now() + 5 * 60 * 1000;
+
       await userExists.save();
-      await sendEmail(email, "OTP Verification Code", otpEmailTemplate(otp));
-      return { otpPending: true, email };
+
+      console.log("STEP 6 - OTP saved");
+
+      await sendEmail(
+        email,
+        "OTP Verification Code",
+        otpEmailTemplate(otp)
+      );
+
+      console.log("STEP 7 - Email sent");
+
+      return {
+        otpPending: true,
+        email,
+      };
     }
 
     const error = new Error("User already exists");
@@ -43,8 +71,15 @@ export const registerService = async (data) => {
     throw error;
   }
 
+  console.log("STEP 8 - Creating new user");
+
   const hashedPassword = await bcrypt.hash(password, 10);
+
+  console.log("STEP 9 - Password hashed");
+
   const otp = generateOtp();
+
+  console.log("STEP 10 - OTP generated");
 
   await User.create({
     fullName,
@@ -55,9 +90,19 @@ export const registerService = async (data) => {
     isVerified: false,
   });
 
-  await sendEmail(email, "OTP Verification Code", otpEmailTemplate(otp));
+  console.log("STEP 11 - User created");
 
-  return { otpSent: true };
+  await sendEmail(
+    email,
+    "OTP Verification Code",
+    otpEmailTemplate(otp)
+  );
+
+  console.log("STEP 12 - Email sent successfully");
+
+  return {
+    otpSent: true,
+  };
 };
 
 // VERIFY OTP
