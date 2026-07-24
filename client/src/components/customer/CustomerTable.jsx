@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Pencil, Trash2, X, Eye } from "lucide-react";
-import api from "../../api/axios";
+import * as customerRepository from "../../offline/modules/people/customer/repository";
 import toast from "react-hot-toast";
 
 const emptyCustomer = {
@@ -16,11 +16,42 @@ const inputClass =
 
 const cellClass = "px-4 py-4";
 
+/**
+ * Shows the live sync state of a customer record based on its queue
+ * status (PENDING/PROCESSING = still syncing, FAILED = server
+ * rejected it — hover to see why, anything else = SYNCED).
+ */
+const SyncBadge = ({ status, error }) => {
+  if (status === "FAILED") {
+    return (
+      <span
+        title={error || "Sync failed"}
+        className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-600 cursor-help"
+      >
+        Failed
+      </span>
+    );
+  }
+
+  if (status === "PENDING" || status === "PROCESSING") {
+    return (
+      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+        Pending
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+      Synced
+    </span>
+  );
+};
+
 const CustomerTable = ({
   customers,
   loading,
   fetchCustomers,
-  onDelete,
   showAddModal,
   setShowAddModal,
 }) => {
@@ -32,12 +63,23 @@ const CustomerTable = ({
   const [page, setPage] = useState(1);
 
   const rowsPerPage = 10;
-  const totalPages = Math.ceil(customers.length / rowsPerPage);
 
-  const paginatedCustomers = customers.slice(
-    (page - 1) * rowsPerPage,
-    page * rowsPerPage
-  );
+  const activeCustomers = customers.filter((customer) => !customer.isDeleted);
+
+  const totalPages = Math.ceil(activeCustomers.length / rowsPerPage);
+
+  const paginatedCustomers = [...activeCustomers]
+    .sort((a, b) => b.localId - a.localId)
+    .slice(
+      (page - 1) * rowsPerPage,
+      page * rowsPerPage
+    );
+
+  useEffect(() => {
+    if (page > totalPages && totalPages > 0) {
+      setPage(totalPages);
+    }
+  }, [totalPages, page]);
 
   const handleNewChange = (e) => {
     setNewCustomer({
@@ -61,17 +103,16 @@ const CustomerTable = ({
     try {
       setSaving(true);
 
-      const res = await api.post("/customers", newCustomer);
+      await customerRepository.create(newCustomer);
 
-      toast.success(res.data.message || "Customer created");
+      toast.success("Customer saved locally");
 
       setNewCustomer(emptyCustomer);
       setShowAddModal(false);
+
       fetchCustomers();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to create customer"
-      );
+      toast.error(error.message || "Failed to save customer");
     } finally {
       setSaving(false);
     }
@@ -79,6 +120,7 @@ const CustomerTable = ({
 
   const openEditModal = (customer) => {
     setEditCustomer({
+      localId: customer.localId,
       id: customer.id,
       customerName: customer.customerName || "",
       contact: customer.contact || "",
@@ -96,26 +138,34 @@ const CustomerTable = ({
     try {
       setSaving(true);
 
-      const res = await api.put(
-        `/customers/${editCustomer.id}`,
+      await customerRepository.update(
+        editCustomer.localId,
         editCustomer
       );
 
-      toast.success(res.data.message || "Customer updated");
+      toast.success("Customer updated locally");
 
       setEditCustomer(null);
+
       fetchCustomers();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to update customer"
-      );
+      toast.error(error.message || "Failed to update customer");
     } finally {
       setSaving(false);
     }
   };
 
   const confirmDelete = async () => {
-    await onDelete(deleteId);
+    try {
+      await customerRepository.remove(deleteId);
+
+      toast.success("Customer deleted locally");
+
+      fetchCustomers();
+    } catch (error) {
+      toast.error(error.message || "Delete failed");
+    }
+
     setDeleteId(null);
   };
 
@@ -131,7 +181,7 @@ const CustomerTable = ({
     <>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full min-w-[860px] text-sm">
             <thead className="bg-orange-50">
               <tr className="text-left text-gray-700">
                 <th className={cellClass}>Sr No</th>
@@ -139,21 +189,22 @@ const CustomerTable = ({
                 <th className={cellClass}>Contact</th>
                 <th className={cellClass}>CNIC</th>
                 <th className={cellClass}>Email</th>
+                <th className={cellClass}>Sync Status</th>
                 <th className={cellClass}>Actions</th>
               </tr>
             </thead>
 
             <tbody>
-              {customers.length === 0 ? (
+              {activeCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="p-8 text-center text-gray-500">
+                  <td colSpan="7" className="p-8 text-center text-gray-500">
                     No customers found
                   </td>
                 </tr>
               ) : (
                 paginatedCustomers.map((customer, index) => (
                   <tr
-                    key={customer.id}
+                    key={customer.localId}
                     className="border-t hover:bg-slate-50 transition"
                   >
                     <td className={cellClass}>
@@ -169,6 +220,13 @@ const CustomerTable = ({
                     <td className={cellClass}>{customer.cnic || "-"}</td>
 
                     <td className={cellClass}>{customer.email || "-"}</td>
+
+                    <td className={cellClass}>
+                      <SyncBadge
+                        status={customer.queueStatus}
+                        error={customer.queueError}
+                      />
+                    </td>
 
                     <td className={cellClass}>
                       <div className="flex gap-2">
@@ -187,7 +245,7 @@ const CustomerTable = ({
                         </button>
 
                         <button
-                          onClick={() => setDeleteId(customer.id)}
+                          onClick={() => setDeleteId(customer.localId)}
                           className="p-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition cursor-pointer"
                         >
                           <Trash2 size={18} />
@@ -338,6 +396,16 @@ const CustomerTable = ({
               </p>
               <p>
                 <strong>Email:</strong> {viewCustomer.email || "-"}
+              </p>
+              <p>
+                <strong>Address:</strong> {viewCustomer.address || "-"}
+              </p>
+              <p>
+                <strong>Sync Status:</strong>{" "}
+                <SyncBadge
+                  status={viewCustomer.queueStatus}
+                  error={viewCustomer.queueError}
+                />
               </p>
             </div>
           </div>

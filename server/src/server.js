@@ -22,7 +22,11 @@ sequelize
   .authenticate()
   .then(() => {
     console.log("MySQL Connected");
-    return sequelize.sync();
+    // alter: true lets Sequelize add/adjust columns on existing tables
+    // (e.g. new offlineId/version columns on Customer) without a
+    // separate migration system. Fine for development; swap for real
+    // migrations before this runs against production data.
+    return sequelize.sync({ alter: true });
   })
   .then(() => {
     app.listen(PORT, () => {

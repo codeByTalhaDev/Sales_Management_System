@@ -23,6 +23,8 @@ import ExpiryList from "../pages/stock/ExpiryList";
 import PurchaseList from "../pages/purchase/PurchaseList";
 import AddPurchase from "../pages/purchase/AddPurchase";
 
+import SyncInspector from "../pages/dev/SyncInspector";
+
 import DashboardLayout from "../layout/DashboardLayout";
 import ProtectedRoute from "./ProtectedRoute";
 import PublicRoute from "./PublicRoute";
@@ -62,6 +64,9 @@ export default function AppRoutes() {
           {/* Purchases */}
           <Route path="purchase/list" element={<PurchaseList />} />
           <Route path="purchase/add" element={<AddPurchase />} />
+
+          {/* Dev tools — remove before production build */}
+          <Route path="dev/sync-inspector" element={<SyncInspector />} />
         </Route>
       </Route>
 

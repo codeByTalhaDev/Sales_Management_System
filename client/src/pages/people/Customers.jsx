@@ -1,45 +1,64 @@
 import { useEffect, useState } from "react";
 import { Plus, Users } from "lucide-react";
-
-import api from "../../api/axios";
 import toast from "react-hot-toast";
 
 import CustomerTable from "../../components/customer/CustomerTable";
+
+import * as customerRepository from "../../offline/modules/people/customer/repository";
+import * as queue from "../../offline/core/queue";
+import customerConfig from "../../offline/modules/people/customer/config";
 
 const Customers = () => {
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
 
+  /**
+   * Load customers from IndexedDB, merged with their current queue
+   * status (PENDING / PROCESSING / FAILED) and failure reason, if any,
+   * so the table can show accurate real-time sync state per row.
+   */
   const fetchCustomers = async () => {
     try {
       setLoading(true);
 
-      const res = await api.get("/customers");
+      const data = await customerRepository.getAll();
+      const queueItems = await queue.getByModule(customerConfig.module);
+      const queueMap = new Map(queueItems.map((q) => [q.localId, q]));
 
-      setCustomers(res.data.customers || []);
+      const merged = data.map((customer) => {
+        const queueItem = queueMap.get(customer.localId);
+        return {
+          ...customer,
+          queueStatus: queueItem?.status ?? null,
+          queueError: queueItem?.errorMessage ?? null,
+        };
+      });
+
+      setCustomers(merged);
     } catch (error) {
-      toast.error(
-        error.response?.data?.message ||
-          "Failed to fetch customers"
-      );
+      console.error(error);
+
+      toast.error("Failed to load customers");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (id) => {
+  /**
+   * Delete Customer
+   */
+  const handleDelete = async (localId) => {
     try {
-      const res = await api.delete(`/customers/${id}`);
+      await customerRepository.remove(localId);
 
-      toast.success(res.data.message || "Customer deleted");
+      toast.success("Customer deleted");
 
-      fetchCustomers();
+      await fetchCustomers();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message ||
-          "Delete failed"
-      );
+      console.error(error);
+
+      toast.error(error.message || "Delete failed");
     }
   };
 
