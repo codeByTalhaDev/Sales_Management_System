@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pencil, Trash2, X, Eye } from "lucide-react";
-import api from "../../api/axios";
+import * as employeeRepository from "../../offline/modules/people/employee/repository";
+import useOnlineStatus from "../../hooks/useOnlineStatus";
 import toast from "react-hot-toast";
 
 const emptyEmployee = {
@@ -17,11 +18,86 @@ const inputClass =
 
 const cellClass = "px-4 py-4";
 
+/**
+ * A small styled hover tooltip — matches the one used in
+ * CustomerTable.jsx / SupplierTable.jsx, replacing the browser's
+ * native title bubble.
+ */
+const Tooltip = ({ text, children }) => {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      {children}
+
+      {visible && (
+        <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-20 w-max max-w-[220px] pointer-events-none">
+          <span className="block bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg leading-snug">
+            {text}
+          </span>
+          <span className="block w-2 h-2 bg-gray-900 rotate-45 mx-auto -mt-1" />
+        </span>
+      )}
+    </span>
+  );
+};
+
+/**
+ * Shows the live sync state of an employee record:
+ * - yellow "Pending" — saved locally, offline, nothing can happen yet
+ * - blue "Syncing..." — saved locally, browser is online, a sync
+ *   attempt is imminent or already in progress
+ * - green "Synced" — confirmed saved on the server
+ * - red "Failed" — the server rejected it; hover to see why
+ * Comes from Employees.jsx, which correlates each employee with its
+ * queue entry to compute syncState/syncError.
+ */
+const SyncBadge = ({ status, error, isOnline }) => {
+  if (status === "FAILED") {
+    const badge = (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-600">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+        Failed
+      </span>
+    );
+
+    return error ? <Tooltip text={error}>{badge}</Tooltip> : badge;
+  }
+
+  if (status === "PENDING" || status === "PROCESSING") {
+    if (isOnline) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+          Syncing...
+        </span>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+        Pending
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+      Synced
+    </span>
+  );
+};
+
 const EmployeeTable = ({
   employees,
   loading,
   fetchEmployees,
-  onDelete,
   showAddModal,
   setShowAddModal,
 }) => {
@@ -31,14 +107,17 @@ const EmployeeTable = ({
   const [deleteId, setDeleteId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
+  const isOnline = useOnlineStatus();
 
   const rowsPerPage = 10;
-  const totalPages = Math.ceil(employees.length / rowsPerPage);
 
-  const paginatedEmployees = employees.slice(
-    (page - 1) * rowsPerPage,
-    page * rowsPerPage
-  );
+  const activeEmployees = employees.filter((employee) => !employee.isDeleted);
+
+  const totalPages = Math.ceil(activeEmployees.length / rowsPerPage);
+
+  const paginatedEmployees = [...activeEmployees]
+    .sort((a, b) => b.localId - a.localId)
+    .slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handleNewChange = (e) => {
     setNewEmployee({
@@ -62,17 +141,16 @@ const EmployeeTable = ({
     try {
       setSaving(true);
 
-      const res = await api.post("/employees", newEmployee);
+      await employeeRepository.create(newEmployee);
 
-      toast.success(res.data.message || "Employee created");
+      toast.success("Employee saved locally");
 
       setNewEmployee(emptyEmployee);
       setShowAddModal(false);
+
       fetchEmployees();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to create employee"
-      );
+      toast.error(error.message || "Failed to save employee");
     } finally {
       setSaving(false);
     }
@@ -80,6 +158,7 @@ const EmployeeTable = ({
 
   const openEditModal = (employee) => {
     setEditEmployee({
+      localId: employee.localId,
       id: employee.id,
       employeeName: employee.employeeName || "",
       contact: employee.contact || "",
@@ -98,26 +177,31 @@ const EmployeeTable = ({
     try {
       setSaving(true);
 
-      const res = await api.put(
-        `/employees/${editEmployee.id}`,
-        editEmployee
-      );
+      await employeeRepository.update(editEmployee.localId, editEmployee);
 
-      toast.success(res.data.message || "Employee updated");
+      toast.success("Employee updated locally");
 
       setEditEmployee(null);
+
       fetchEmployees();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to update employee"
-      );
+      toast.error(error.message || "Failed to update employee");
     } finally {
       setSaving(false);
     }
   };
 
   const confirmDelete = async () => {
-    await onDelete(deleteId);
+    try {
+      await employeeRepository.remove(deleteId);
+
+      toast.success("Employee deleted locally");
+
+      fetchEmployees();
+    } catch (error) {
+      toast.error(error.message || "Delete failed");
+    }
+
     setDeleteId(null);
   };
 
@@ -143,21 +227,22 @@ const EmployeeTable = ({
                 <th className={cellClass}>Designation</th>
                 <th className={cellClass}>Salary</th>
                 <th className={cellClass}>Joining Date</th>
+                <th className={cellClass}>Sync Status</th>
                 <th className={cellClass}>Actions</th>
               </tr>
             </thead>
 
             <tbody>
-              {employees.length === 0 ? (
+              {activeEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="p-8 text-center text-gray-500">
+                  <td colSpan="9" className="p-8 text-center text-gray-500">
                     No employees found
                   </td>
                 </tr>
               ) : (
                 paginatedEmployees.map((employee, index) => (
                   <tr
-                    key={employee.id}
+                    key={employee.localId}
                     className="border-t hover:bg-slate-50 transition"
                   >
                     <td className={cellClass}>
@@ -183,6 +268,14 @@ const EmployeeTable = ({
                     </td>
 
                     <td className={cellClass}>
+                      <SyncBadge
+                        status={employee.syncState}
+                        error={employee.syncError}
+                        isOnline={isOnline}
+                      />
+                    </td>
+
+                    <td className={cellClass}>
                       <div className="flex gap-2">
                         <button
                           onClick={() => setViewEmployee(employee)}
@@ -199,7 +292,7 @@ const EmployeeTable = ({
                         </button>
 
                         <button
-                          onClick={() => setDeleteId(employee.id)}
+                          onClick={() => setDeleteId(employee.localId)}
                           className="p-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition cursor-pointer"
                         >
                           <Trash2 size={18} />
@@ -369,6 +462,19 @@ const EmployeeTable = ({
                 <strong>Joining Date:</strong>{" "}
                 {viewEmployee.joiningDate || "-"}
               </p>
+              <p className="flex items-center gap-2">
+                <strong>Sync Status:</strong>{" "}
+                <SyncBadge
+                  status={viewEmployee.syncState}
+                  error={viewEmployee.syncError}
+                  isOnline={isOnline}
+                />
+              </p>
+              {viewEmployee.syncState === "FAILED" && viewEmployee.syncError && (
+                <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  {viewEmployee.syncError}
+                </p>
+              )}
             </div>
           </div>
         </div>

@@ -44,6 +44,18 @@ export const updateEmployee = async (req, res, next) => {
       employee,
     });
   } catch (error) {
+    // VERSION CONFLICT — respond 409 with the current server record so
+    // the offline client can run its conflict resolution strategy
+    // instead of treating this as a generic failure.
+    if (error.isConflict) {
+      return res.status(409).json({
+        success: false,
+        conflict: true,
+        message: "Version conflict",
+        employee: error.serverRecord,
+      });
+    }
+
     next(error);
   }
 };

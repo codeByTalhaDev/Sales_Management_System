@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Pencil, Trash2, X, Eye } from "lucide-react";
 import * as customerRepository from "../../offline/modules/people/customer/repository";
+import useOnlineStatus from "../../hooks/useOnlineStatus";
 import toast from "react-hot-toast";
 
 const emptyCustomer = {
@@ -17,32 +18,76 @@ const inputClass =
 const cellClass = "px-4 py-4";
 
 /**
- * Shows the live sync state of a customer record based on its queue
- * status (PENDING/PROCESSING = still syncing, FAILED = server
- * rejected it — hover to see why, anything else = SYNCED).
+ * A small styled hover tooltip — replaces the browser's native title
+ * bubble (which looks inconsistent and dated) with one matching the
+ * app's own design.
  */
-const SyncBadge = ({ status, error }) => {
+const Tooltip = ({ text, children }) => {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      {children}
+
+      {visible && (
+        <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-20 w-max max-w-[220px] pointer-events-none">
+          <span className="block bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg leading-snug">
+            {text}
+          </span>
+          <span className="block w-2 h-2 bg-gray-900 rotate-45 mx-auto -mt-1" />
+        </span>
+      )}
+    </span>
+  );
+};
+
+/**
+ * Shows the live sync state of a customer record:
+ * - yellow "Pending" — saved locally, offline, nothing can happen yet
+ * - blue "Syncing..." — saved locally, browser is online, a sync
+ *   attempt is imminent or already in progress
+ * - green "Synced" — confirmed saved on the server
+ * - red "Failed" — the server rejected it; hover to see why
+ * Comes from Customers.jsx, which correlates each customer with its
+ * queue entry (see queue.getByModule) to compute syncState/syncError.
+ */
+const SyncBadge = ({ status, error, isOnline }) => {
   if (status === "FAILED") {
-    return (
-      <span
-        title={error || "Sync failed"}
-        className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-600 cursor-help"
-      >
+    const badge = (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-600">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
         Failed
       </span>
     );
+
+    return error ? <Tooltip text={error}>{badge}</Tooltip> : badge;
   }
 
   if (status === "PENDING" || status === "PROCESSING") {
+    if (isOnline) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+          Syncing...
+        </span>
+      );
+    }
+
     return (
-      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
         Pending
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
       Synced
     </span>
   );
@@ -61,6 +106,7 @@ const CustomerTable = ({
   const [deleteId, setDeleteId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
+  const isOnline = useOnlineStatus();
 
   const rowsPerPage = 10;
 
@@ -223,8 +269,9 @@ const CustomerTable = ({
 
                     <td className={cellClass}>
                       <SyncBadge
-                        status={customer.queueStatus}
-                        error={customer.queueError}
+                        status={customer.syncState}
+                        error={customer.syncError}
+                        isOnline={isOnline}
                       />
                     </td>
 
@@ -400,13 +447,19 @@ const CustomerTable = ({
               <p>
                 <strong>Address:</strong> {viewCustomer.address || "-"}
               </p>
-              <p>
+              <p className="flex items-center gap-2">
                 <strong>Sync Status:</strong>{" "}
                 <SyncBadge
-                  status={viewCustomer.queueStatus}
-                  error={viewCustomer.queueError}
+                  status={viewCustomer.syncState}
+                  error={viewCustomer.syncError}
+                  isOnline={isOnline}
                 />
               </p>
+              {viewCustomer.syncState === "FAILED" && viewCustomer.syncError && (
+                <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  {viewCustomer.syncError}
+                </p>
+              )}
             </div>
           </div>
         </div>

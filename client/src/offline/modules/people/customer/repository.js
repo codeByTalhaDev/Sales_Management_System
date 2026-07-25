@@ -8,12 +8,67 @@ import { now } from "../../../utils/timestamp";
 
 import { OPERATIONS, SYNC_STATUS } from "../../../constants/syncStatus";
 
-const store = db.table(customerConfig.store);
+// NOTE: this is deliberately a function, not a top-level constant.
+// database.js imports config/modules.js (to build the Dexie schema),
+// which imports this module's sync.js, which imports this file — a
+// circular chain back to database.js. Calling db.table(...) at import
+// time (`const store = db.table(...)`) would run before `db` finishes
+// being constructed, throwing "Cannot access 'db' before initialization".
+// Deferring the lookup into a function means it only runs when actually
+// invoked (after the app has finished loading), which is always safe.
+const store = () => db.table(customerConfig.store);
+
+const DUPLICATE_FIELD_LABELS = {
+  contact: "contact number",
+  cnic: "CNIC",
+  email: "email",
+};
+
+/**
+ * Check contact/cnic/email for duplicates against IndexedDB, excluding
+ * soft-deleted records and (on update) the record being edited itself.
+ * Mirrors the same uniqueness rules enforced on the server.
+ *
+ * Checks ALL fields before throwing, so if e.g. both contact and email
+ * already exist, the user is told about both at once.
+ */
+const checkDuplicateFields = async (data, excludeLocalId = null) => {
+  const fieldsToCheck = ["contact", "cnic", "email"];
+  const conflicts = [];
+
+  for (const field of fieldsToCheck) {
+    const value = data[field];
+    if (!value) continue;
+
+    const matches = await store().where(field).equals(value).toArray();
+
+    const conflict = matches.find(
+      (record) => !record.isDeleted && record.localId !== excludeLocalId
+    );
+
+    if (conflict) {
+      conflicts.push(DUPLICATE_FIELD_LABELS[field]);
+    }
+  }
+
+  if (conflicts.length > 0) {
+    const list =
+      conflicts.length === 1
+        ? conflicts[0]
+        : conflicts.length === 2
+        ? conflicts.join(" and ")
+        : `${conflicts.slice(0, -1).join(", ")} and ${conflicts[conflicts.length - 1]}`;
+
+    throw new Error(`Customer with this ${list} already exists`);
+  }
+};
 
 /**
  * Create Customer
  */
 export const create = async (customer) => {
+  await checkDuplicateFields(customer);
+
   const timestamp = now();
 
   const customerRecord = {
@@ -48,8 +103,8 @@ export const create = async (customer) => {
 
   let localId;
 
-  await db.transaction("rw", store, db.queue, async () => {
-    localId = await store.add(customerRecord);
+  await db.transaction("rw", store(), db.queue, async () => {
+    localId = await store().add(customerRecord);
 
     await queue.enqueue({
       module: customerConfig.module,
@@ -65,7 +120,7 @@ export const create = async (customer) => {
     });
   });
 
-  return await store.get(localId);
+  return await store().get(localId);
 };
 
 /**
@@ -73,12 +128,12 @@ export const create = async (customer) => {
  */
 export const getAll = async () => {
   try {
-    return await store.where("isDeleted").equals(0).toArray();
+    return await store().where("isDeleted").equals(0).toArray();
   } catch (error) {
     console.error("getAll() failed:", error);
 
     console.log("Schema:", customerConfig.schema);
-    console.log("Store:", store.name);
+    console.log("Store:", store().name);
 
     throw error;
   }
@@ -88,32 +143,34 @@ export const getAll = async () => {
  * Get Customer By Local Id
  */
 export const getByLocalId = async (localId) => {
-  return await store.get(localId);
+  return await store().get(localId);
 };
 
 /**
  * Get Customer By Server Id
  */
 export const getByServerId = async (id) => {
-  return await store.where("id").equals(id).first();
+  return await store().where("id").equals(id).first();
 };
 
 /**
  * Get Customer By Offline Id
  */
 export const getByOfflineId = async (offlineId) => {
-  return await store.where("offlineId").equals(offlineId).first();
+  return await store().where("offlineId").equals(offlineId).first();
 };
 
 /**
  * Update Customer
  */
 export const update = async (localId, updates) => {
-  const customer = await store.get(localId);
+  const customer = await store().get(localId);
 
   if (!customer) {
     throw new Error("Customer not found.");
   }
+
+  await checkDuplicateFields(updates, localId);
 
   const updatedCustomer = {
     ...customer,
@@ -127,8 +184,8 @@ export const update = async (localId, updates) => {
     updatedAt: now(),
   };
 
-  await db.transaction("rw", store, db.queue, async () => {
-    await store.put(updatedCustomer);
+  await db.transaction("rw", store(), db.queue, async () => {
+    await store().put(updatedCustomer);
 
     await queue.enqueue({
       module: customerConfig.module,
@@ -141,14 +198,14 @@ export const update = async (localId, updates) => {
     });
   });
 
-  return await store.get(localId);
+  return await store().get(localId);
 };
 
 /**
  * Soft Delete Customer
  */
 export const remove = async (localId) => {
-  const customer = await store.get(localId);
+  const customer = await store().get(localId);
 
   if (!customer) {
     throw new Error("Customer not found.");
@@ -168,8 +225,8 @@ export const remove = async (localId) => {
     updatedAt: now(),
   };
 
-  await db.transaction("rw", store, db.queue, async () => {
-    await store.put(deletedCustomer);
+  await db.transaction("rw", store(), db.queue, async () => {
+    await store().put(deletedCustomer);
 
     await queue.enqueue({
       module: customerConfig.module,

@@ -13,6 +13,8 @@ const Customer = sequelize.define(
     // Identifies the record that created this row on the offline client,
     // so a retried CREATE sync (e.g. after a dropped response) can be
     // detected as "already created" instead of producing a duplicate row.
+    // Safe to keep as a hard DB unique constraint — a given offlineId is
+    // only ever generated once, and is never reused after a delete.
     offlineId: {
       type: DataTypes.STRING,
       allowNull: true,
@@ -33,6 +35,13 @@ const Customer = sequelize.define(
       allowNull: false,
     },
 
+    // NOTE: contact/cnic/email are intentionally NOT unique at the
+    // database level. This table uses soft delete (status: "N"), and a
+    // hard DB unique constraint has no concept of "deleted" — it blocks
+    // a value forever even after the row is soft-deleted, permanently
+    // locking out a phone number/CNIC/email a real customer may need to
+    // reuse later. Uniqueness among ACTIVE records is instead enforced
+    // in customerService.js, which only checks status: "Y" rows.
     contact: {
       type: DataTypes.STRING,
       allowNull: false,

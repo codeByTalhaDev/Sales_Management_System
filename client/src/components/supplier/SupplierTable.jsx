@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pencil, Trash2, X, Eye } from "lucide-react";
-import api from "../../api/axios";
+import * as supplierRepository from "../../offline/modules/people/supplier/repository";
+import useOnlineStatus from "../../hooks/useOnlineStatus";
 import toast from "react-hot-toast";
 
 const emptySupplier = {
@@ -16,11 +17,85 @@ const inputClass =
 
 const cellClass = "px-4 py-4";
 
+/**
+ * A small styled hover tooltip — matches the one used in
+ * CustomerTable.jsx, replacing the browser's native title bubble.
+ */
+const Tooltip = ({ text, children }) => {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      {children}
+
+      {visible && (
+        <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-20 w-max max-w-[220px] pointer-events-none">
+          <span className="block bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg leading-snug">
+            {text}
+          </span>
+          <span className="block w-2 h-2 bg-gray-900 rotate-45 mx-auto -mt-1" />
+        </span>
+      )}
+    </span>
+  );
+};
+
+/**
+ * Shows the live sync state of a supplier record:
+ * - yellow "Pending" — saved locally, offline, nothing can happen yet
+ * - blue "Syncing..." — saved locally, browser is online, a sync
+ *   attempt is imminent or already in progress
+ * - green "Synced" — confirmed saved on the server
+ * - red "Failed" — the server rejected it; hover to see why
+ * Comes from Suppliers.jsx, which correlates each supplier with its
+ * queue entry to compute syncState/syncError.
+ */
+const SyncBadge = ({ status, error, isOnline }) => {
+  if (status === "FAILED") {
+    const badge = (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-600">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+        Failed
+      </span>
+    );
+
+    return error ? <Tooltip text={error}>{badge}</Tooltip> : badge;
+  }
+
+  if (status === "PENDING" || status === "PROCESSING") {
+    if (isOnline) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+          Syncing...
+        </span>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+        Pending
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+      Synced
+    </span>
+  );
+};
+
 const SupplierTable = ({
   suppliers,
   loading,
   fetchSuppliers,
-  onDelete,
   showAddModal,
   setShowAddModal,
 }) => {
@@ -30,14 +105,17 @@ const SupplierTable = ({
   const [deleteId, setDeleteId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
+  const isOnline = useOnlineStatus();
 
   const rowsPerPage = 10;
-  const totalPages = Math.ceil(suppliers.length / rowsPerPage);
 
-  const paginatedSuppliers = suppliers.slice(
-    (page - 1) * rowsPerPage,
-    page * rowsPerPage
-  );
+  const activeSuppliers = suppliers.filter((supplier) => !supplier.isDeleted);
+
+  const totalPages = Math.ceil(activeSuppliers.length / rowsPerPage);
+
+  const paginatedSuppliers = [...activeSuppliers]
+    .sort((a, b) => b.localId - a.localId)
+    .slice((page - 1) * rowsPerPage, page * rowsPerPage);
 
   const handleNewChange = (e) => {
     setNewSupplier({
@@ -61,17 +139,16 @@ const SupplierTable = ({
     try {
       setSaving(true);
 
-      const res = await api.post("/suppliers", newSupplier);
+      await supplierRepository.create(newSupplier);
 
-      toast.success(res.data.message || "Supplier created");
+      toast.success("Supplier saved locally");
 
       setNewSupplier(emptySupplier);
       setShowAddModal(false);
+
       fetchSuppliers();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to create supplier"
-      );
+      toast.error(error.message || "Failed to save supplier");
     } finally {
       setSaving(false);
     }
@@ -79,6 +156,7 @@ const SupplierTable = ({
 
   const openEditModal = (supplier) => {
     setEditSupplier({
+      localId: supplier.localId,
       id: supplier.id,
       supplierName: supplier.supplierName || "",
       contact: supplier.contact || "",
@@ -96,26 +174,31 @@ const SupplierTable = ({
     try {
       setSaving(true);
 
-      const res = await api.put(
-        `/suppliers/${editSupplier.id}`,
-        editSupplier
-      );
+      await supplierRepository.update(editSupplier.localId, editSupplier);
 
-      toast.success(res.data.message || "Supplier updated");
+      toast.success("Supplier updated locally");
 
       setEditSupplier(null);
+
       fetchSuppliers();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to update supplier"
-      );
+      toast.error(error.message || "Failed to update supplier");
     } finally {
       setSaving(false);
     }
   };
 
   const confirmDelete = async () => {
-    await onDelete(deleteId);
+    try {
+      await supplierRepository.remove(deleteId);
+
+      toast.success("Supplier deleted locally");
+
+      fetchSuppliers();
+    } catch (error) {
+      toast.error(error.message || "Delete failed");
+    }
+
     setDeleteId(null);
   };
 
@@ -131,7 +214,7 @@ const SupplierTable = ({
     <>
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full min-w-[860px] text-sm">
             <thead className="bg-orange-50">
               <tr className="text-left text-gray-700">
                 <th className={cellClass}>Sr No</th>
@@ -139,21 +222,22 @@ const SupplierTable = ({
                 <th className={cellClass}>Contact</th>
                 <th className={cellClass}>Company</th>
                 <th className={cellClass}>Email</th>
+                <th className={cellClass}>Sync Status</th>
                 <th className={cellClass}>Actions</th>
               </tr>
             </thead>
 
             <tbody>
-              {suppliers.length === 0 ? (
+              {activeSuppliers.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="p-8 text-center text-gray-500">
+                  <td colSpan="7" className="p-8 text-center text-gray-500">
                     No suppliers found
                   </td>
                 </tr>
               ) : (
                 paginatedSuppliers.map((supplier, index) => (
                   <tr
-                    key={supplier.id}
+                    key={supplier.localId}
                     className="border-t hover:bg-slate-50 transition"
                   >
                     <td className={cellClass}>
@@ -169,6 +253,14 @@ const SupplierTable = ({
                     <td className={cellClass}>{supplier.company || "-"}</td>
 
                     <td className={cellClass}>{supplier.email || "-"}</td>
+
+                    <td className={cellClass}>
+                      <SyncBadge
+                        status={supplier.syncState}
+                        error={supplier.syncError}
+                        isOnline={isOnline}
+                      />
+                    </td>
 
                     <td className={cellClass}>
                       <div className="flex gap-2">
@@ -187,7 +279,7 @@ const SupplierTable = ({
                         </button>
 
                         <button
-                          onClick={() => setDeleteId(supplier.id)}
+                          onClick={() => setDeleteId(supplier.localId)}
                           className="p-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition cursor-pointer"
                         >
                           <Trash2 size={18} />
@@ -339,6 +431,19 @@ const SupplierTable = ({
               <p>
                 <strong>Email:</strong> {viewSupplier.email || "-"}
               </p>
+              <p className="flex items-center gap-2">
+                <strong>Sync Status:</strong>{" "}
+                <SyncBadge
+                  status={viewSupplier.syncState}
+                  error={viewSupplier.syncError}
+                  isOnline={isOnline}
+                />
+              </p>
+              {viewSupplier.syncState === "FAILED" && viewSupplier.syncError && (
+                <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  {viewSupplier.syncError}
+                </p>
+              )}
             </div>
           </div>
         </div>

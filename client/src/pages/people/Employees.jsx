@@ -1,50 +1,95 @@
 import { useEffect, useState } from "react";
 import { Plus, Briefcase } from "lucide-react";
-
-import api from "../../api/axios";
 import toast from "react-hot-toast";
 
 import EmployeeTable from "../../components/employee/EmployeeTable";
+
+import * as employeeRepository from "../../offline/modules/people/employee/repository";
+import * as queue from "../../offline/core/queue";
+import { SYNC_STATUS } from "../../offline/constants/syncStatus";
+import { SYNC_COMPLETE_EVENT } from "../../offline/core/syncManager";
 
 const Employees = () => {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
 
+  /**
+   * Load employees from IndexedDB, and correlate each one with its
+   * queue entry (if any) so the UI can show whether it's still
+   * pending, actually failed to sync, or fully synced.
+   */
   const fetchEmployees = async () => {
     try {
       setLoading(true);
 
-      const res = await api.get("/employees");
+      const data = await employeeRepository.getAll();
+      const queueItems = await queue.getByModule("employees");
 
-      setEmployees(res.data.employees || []);
-    } catch (error) {
-      toast.error(
-        error.response?.data?.message ||
-          "Failed to fetch employees"
+      const queueByLocalId = new Map(
+        queueItems.map((item) => [item.localId, item])
       );
+
+      const merged = data.map((employee) => {
+        const queueItem = queueByLocalId.get(employee.localId);
+
+        let syncState = employee.syncStatus; // PENDING or SYNCED
+        let syncError = null;
+
+        if (queueItem?.status === SYNC_STATUS.FAILED) {
+          syncState = SYNC_STATUS.FAILED;
+          syncError = queueItem.errorMessage;
+        }
+
+        return {
+          ...employee,
+          syncState,
+          syncError,
+        };
+      });
+
+      setEmployees(merged);
+    } catch (error) {
+      console.error(error);
+
+      toast.error("Failed to load employees");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (id) => {
+  /**
+   * Delete Employee
+   */
+  const handleDelete = async (localId) => {
     try {
-      const res = await api.delete(`/employees/${id}`);
+      await employeeRepository.remove(localId);
 
-      toast.success(res.data.message || "Employee deleted");
+      toast.success("Employee deleted");
 
-      fetchEmployees();
+      await fetchEmployees();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message ||
-          "Delete failed"
-      );
+      console.error(error);
+
+      toast.error(error.message || "Delete failed");
     }
   };
 
   useEffect(() => {
     fetchEmployees();
+
+    // Re-fetch automatically whenever a background sync cycle finishes
+    // — so PENDING/FAILED/SYNCED badges update live without the user
+    // needing to manually reload the page.
+    const handleSyncComplete = () => {
+      fetchEmployees();
+    };
+
+    window.addEventListener(SYNC_COMPLETE_EVENT, handleSyncComplete);
+
+    return () => {
+      window.removeEventListener(SYNC_COMPLETE_EVENT, handleSyncComplete);
+    };
   }, []);
 
   return (

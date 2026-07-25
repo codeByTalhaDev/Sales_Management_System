@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { RefreshCw, Database, Trash2, Search, X, AlertTriangle } from "lucide-react";
 import toast from "react-hot-toast";
 import db from "../../offline/core/database";
@@ -155,20 +156,45 @@ const ConfirmModal = ({ open, tableName, onConfirm, onCancel }) => {
 };
 
 const SyncInspector = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [tableNames, setTableNames] = useState([]);
-  const [activeTable, setActiveTable] = useState(null);
+  const [activeTable, setActiveTableState] = useState(
+    searchParams.get("table") || null
+  );
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedRow, setSelectedRow] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
+  // Keep the active table in sync with the URL (?table=...) so a
+  // browser refresh reloads the same tab you were on, instead of
+  // always resetting to the alphabetically-first table.
+  const setActiveTable = (name) => {
+    setActiveTableState(name);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set("table", name);
+      return next;
+    });
+  };
+
   const loadTableNames = useCallback(() => {
     const names = db.tables.map((t) => t.name).sort();
     setTableNames(names);
-    if (!activeTable && names.length) {
+
+    if (names.length === 0) return;
+
+    // Prefer whatever table is already named in the URL, as long as
+    // it actually exists; otherwise fall back to the first table.
+    const fromUrl = searchParams.get("table");
+    if (fromUrl && names.includes(fromUrl)) {
+      setActiveTableState(fromUrl);
+    } else if (!activeTable || !names.includes(activeTable)) {
       setActiveTable(names[0]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTable]);
 
   const loadRows = useCallback(async (tableName) => {
@@ -187,7 +213,8 @@ const SyncInspector = () => {
 
   useEffect(() => {
     loadTableNames();
-  }, [loadTableNames]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (activeTable) loadRows(activeTable);

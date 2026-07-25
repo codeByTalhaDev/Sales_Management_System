@@ -6,7 +6,8 @@ import CustomerTable from "../../components/customer/CustomerTable";
 
 import * as customerRepository from "../../offline/modules/people/customer/repository";
 import * as queue from "../../offline/core/queue";
-import customerConfig from "../../offline/modules/people/customer/config";
+import { SYNC_STATUS } from "../../offline/constants/syncStatus";
+import { SYNC_COMPLETE_EVENT } from "../../offline/core/syncManager";
 
 const Customers = () => {
   const [customers, setCustomers] = useState([]);
@@ -14,24 +15,36 @@ const Customers = () => {
   const [showAddModal, setShowAddModal] = useState(false);
 
   /**
-   * Load customers from IndexedDB, merged with their current queue
-   * status (PENDING / PROCESSING / FAILED) and failure reason, if any,
-   * so the table can show accurate real-time sync state per row.
+   * Load customers from IndexedDB, and correlate each one with its
+   * queue entry (if any) so the UI can show whether it's still
+   * pending, actually failed to sync, or fully synced.
    */
   const fetchCustomers = async () => {
     try {
       setLoading(true);
 
       const data = await customerRepository.getAll();
-      const queueItems = await queue.getByModule(customerConfig.module);
-      const queueMap = new Map(queueItems.map((q) => [q.localId, q]));
+      const queueItems = await queue.getByModule("customers");
+
+      const queueByLocalId = new Map(
+        queueItems.map((item) => [item.localId, item])
+      );
 
       const merged = data.map((customer) => {
-        const queueItem = queueMap.get(customer.localId);
+        const queueItem = queueByLocalId.get(customer.localId);
+
+        let syncState = customer.syncStatus; // PENDING or SYNCED
+        let syncError = null;
+
+        if (queueItem?.status === SYNC_STATUS.FAILED) {
+          syncState = SYNC_STATUS.FAILED;
+          syncError = queueItem.errorMessage;
+        }
+
         return {
           ...customer,
-          queueStatus: queueItem?.status ?? null,
-          queueError: queueItem?.errorMessage ?? null,
+          syncState,
+          syncError,
         };
       });
 
@@ -64,6 +77,20 @@ const Customers = () => {
 
   useEffect(() => {
     fetchCustomers();
+
+    // Re-fetch automatically whenever a background sync cycle finishes
+    // (server came back online, periodic sync ran, etc.) — so PENDING/
+    // FAILED/SYNCED badges update live without the user needing to
+    // manually reload the page.
+    const handleSyncComplete = () => {
+      fetchCustomers();
+    };
+
+    window.addEventListener(SYNC_COMPLETE_EVENT, handleSyncComplete);
+
+    return () => {
+      window.removeEventListener(SYNC_COMPLETE_EVENT, handleSyncComplete);
+    };
   }, []);
 
   return (

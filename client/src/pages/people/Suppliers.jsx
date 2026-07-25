@@ -1,50 +1,95 @@
 import { useEffect, useState } from "react";
 import { Plus, Truck } from "lucide-react";
-
-import api from "../../api/axios";
 import toast from "react-hot-toast";
 
 import SupplierTable from "../../components/supplier/SupplierTable";
+
+import * as supplierRepository from "../../offline/modules/people/supplier/repository";
+import * as queue from "../../offline/core/queue";
+import { SYNC_STATUS } from "../../offline/constants/syncStatus";
+import { SYNC_COMPLETE_EVENT } from "../../offline/core/syncManager";
 
 const Suppliers = () => {
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
 
+  /**
+   * Load suppliers from IndexedDB, and correlate each one with its
+   * queue entry (if any) so the UI can show whether it's still
+   * pending, actually failed to sync, or fully synced.
+   */
   const fetchSuppliers = async () => {
     try {
       setLoading(true);
 
-      const res = await api.get("/suppliers");
+      const data = await supplierRepository.getAll();
+      const queueItems = await queue.getByModule("suppliers");
 
-      setSuppliers(res.data.suppliers || []);
-    } catch (error) {
-      toast.error(
-        error.response?.data?.message ||
-          "Failed to fetch suppliers"
+      const queueByLocalId = new Map(
+        queueItems.map((item) => [item.localId, item])
       );
+
+      const merged = data.map((supplier) => {
+        const queueItem = queueByLocalId.get(supplier.localId);
+
+        let syncState = supplier.syncStatus; // PENDING or SYNCED
+        let syncError = null;
+
+        if (queueItem?.status === SYNC_STATUS.FAILED) {
+          syncState = SYNC_STATUS.FAILED;
+          syncError = queueItem.errorMessage;
+        }
+
+        return {
+          ...supplier,
+          syncState,
+          syncError,
+        };
+      });
+
+      setSuppliers(merged);
+    } catch (error) {
+      console.error(error);
+
+      toast.error("Failed to load suppliers");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (id) => {
+  /**
+   * Delete Supplier
+   */
+  const handleDelete = async (localId) => {
     try {
-      const res = await api.delete(`/suppliers/${id}`);
+      await supplierRepository.remove(localId);
 
-      toast.success(res.data.message || "Supplier deleted");
+      toast.success("Supplier deleted");
 
-      fetchSuppliers();
+      await fetchSuppliers();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message ||
-          "Delete failed"
-      );
+      console.error(error);
+
+      toast.error(error.message || "Delete failed");
     }
   };
 
   useEffect(() => {
     fetchSuppliers();
+
+    // Re-fetch automatically whenever a background sync cycle finishes
+    // — so PENDING/FAILED/SYNCED badges update live without the user
+    // needing to manually reload the page.
+    const handleSyncComplete = () => {
+      fetchSuppliers();
+    };
+
+    window.addEventListener(SYNC_COMPLETE_EVENT, handleSyncComplete);
+
+    return () => {
+      window.removeEventListener(SYNC_COMPLETE_EVENT, handleSyncComplete);
+    };
   }, []);
 
   return (

@@ -28,19 +28,6 @@ const isRetryableError = (error) => {
 };
 
 /**
- * Extract a human-readable message from a rejected server response,
- * so the UI can show *why* a sync failed (e.g. "Customer with this
- * contact already exists") instead of just "failed".
- */
-const getErrorMessage = (error) => {
-  return (
-    error.response?.data?.message ||
-    error.response?.data?.error ||
-    "Sync failed"
-  );
-};
-
-/**
  * Sync Customer Module
  * Push local pending changes, then pull latest server state.
  */
@@ -80,17 +67,27 @@ const pushCustomers = async () => {
 
       await queue.remove(item.id);
     } catch (error) {
-      console.error("Customer Sync (push):", error);
-
       if (isRetryableError(error)) {
-        // Server unreachable (offline, dropped connection, 502/503/504).
+        // Server unreachable — expected during offline/downtime, not a
+        // real failure. Warn instead of error so this doesn't trip
+        // error-monitoring tools on every retry interval.
+        console.warn(
+          "Customer Sync (push) — server unreachable, will retry:",
+          error.message
+        );
+
         // Reset back to PENDING so the next sync attempt picks this up
-        // again automatically — this is not a real failure.
+        // again automatically.
         await queue.retry(item.id);
       } else {
         // The server actually responded and rejected this request —
         // retrying with the same data would fail the same way again.
-        await queue.markFailed(item.id, getErrorMessage(error));
+        // This is a real problem worth surfacing loudly.
+        console.error("Customer Sync (push) — rejected by server:", error);
+
+        const message =
+          error.response?.data?.message || "Failed to sync with server";
+        await queue.markFailed(item.id, message);
       }
     }
   }
@@ -101,11 +98,19 @@ const pushCustomers = async () => {
  * Local records that are still PENDING (unsynced local edits/creates)
  * are never overwritten by a pulled server copy, so in-flight offline
  * work is never silently lost.
+ *
+ * Also removes the local copy of any previously-SYNCED record that no
+ * longer appears in the server's active list — e.g. it was deleted
+ * directly in the database, or deleted from another device. Without
+ * this, a customer removed on the server would stay visible forever
+ * on every other device, still showing "Synced", with no way for the
+ * user to know it's gone.
  */
 const pullCustomers = async () => {
   try {
     const response = await api.get(customerConfig.api);
     const serverCustomers = response.customers || [];
+    const serverIds = new Set(serverCustomers.map((c) => c.id));
 
     const store = db.table(customerConfig.store);
 
@@ -150,10 +155,36 @@ const pullCustomers = async () => {
           });
         }
       }
+
+      // Remove local records that were previously confirmed synced
+      // (have a real server id) but are no longer in the server's
+      // active list — the server is the source of truth for anything
+      // it has already accepted, so a record it no longer has must
+      // have been deleted there.
+      const allLocal = await store.toArray();
+
+      for (const local of allLocal) {
+        const wasSyncedFromServer =
+          local.id !== null &&
+          local.id !== undefined &&
+          local.syncStatus === SYNC_STATUS.SYNCED;
+
+        if (wasSyncedFromServer && !serverIds.has(local.id) && !local.isDeleted) {
+          await store.update(local.localId, {
+            isDeleted: 1,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
     });
   } catch (error) {
-    // A failed pull (e.g. offline) should not break push sync.
-    console.error("Customer Sync (pull):", error);
+    // A failed pull (e.g. offline) should not break push sync. This is
+    // almost always connectivity-related — warn rather than error to
+    // avoid noisy logs during expected offline periods.
+    console.warn(
+      "Customer Sync (pull) — could not reach server:",
+      error.message
+    );
   }
 };
 

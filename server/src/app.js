@@ -3,6 +3,7 @@ import cors from "cors";
 import path from "path";
 
 // ROUTES
+import healthRoutes from "./routes/healthRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import customerRoutes from "./routes/customerRoutes.js";
@@ -32,6 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // ─── ROUTES ────────────────────────────────────────────
+app.use("/api/health",     healthRoutes);
 app.use("/api/auth",       authRoutes);
 app.use("/api/dashboard",  dashboardRoutes);
 app.use("/api/customers",  customerRoutes);
